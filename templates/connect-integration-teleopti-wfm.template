@@ -1,0 +1,427 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Parameters": {
+    "BucketName": {
+      "Type": "String",
+      "Description": "The S3 bucket where you will sync to and from SFTP."
+    },
+	"SFTPUserName": {
+    	"Type": "String",
+    	"Description": "The Teleopti provided username for your SFTP account."
+    },
+    "SFTPPassword": {
+    	"Type": "String",
+    	"Description": "The Teleopti provided password for your SFTP account."
+    },
+    "SFTPHostname": {
+    	"Type": "String",
+    	"Description": "The Teleopti provided hostname of your SFTP server."
+    }
+  },
+  "Resources": {
+    "BridgeQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "MessageRetentionPeriod": 1209600,
+        "QueueName": { "Ref": "AWS::StackName" },
+        "VisibilityTimeout": 180
+      }
+    },
+	"S3ToSQSPolicy": {
+		"Type": "AWS::SQS::QueuePolicy",
+		"Properties": {
+			"PolicyDocument": {
+				"Id": "PushMessageToSQSPolicy",
+				"Version": "2012-10-17",
+				"Statement": [
+					{
+						"Sid": "allow-s3-to-send-message-to-sqs",
+						"Effect": "Allow",
+						"Action": [ "sqs:SendMessage","sqs:ReceiveMessage" ],
+						"Principal": "*",
+						"Condition": {
+                            "ArnLike": {
+                                "aws:SourceArn": "arn:aws:s3:::*"
+                            }
+                        }
+					}
+				]
+			},
+			"Queues": [
+				{
+					"Ref": "BridgeQueue"
+				}
+			]
+		},
+		"DependsOn": [
+        "BridgeQueue"
+      ]
+	},
+    "IntegrationTestRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version" : "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [ "lambda.amazonaws.com" ]
+              },
+              "Action": [ "sts:AssumeRole" ]
+            }
+          ]
+        },
+        "Path": "/",
+		"ManagedPolicyArns": [ "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole" ]
+		}
+	},
+    "IntegrationTestFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": "teleoptiintegration",
+          "S3Key": "connect-integration-teleopti-wfm/functions/packages/integration-test/lambda.zip"
+        },
+        "Handler": "main.handle",
+        "MemorySize": "256",
+        "Role": { "Fn::GetAtt" : [ "IntegrationTestRole", "Arn" ] },
+        "Runtime": "nodejs6.10",
+        "Timeout": 300
+      },
+      "DependsOn": [
+        "IntegrationTestRole"
+      ]
+    },
+	"IntegrationTest":{
+		"Type": "Custom::IntegrationTest",
+		"Version": "1.0",
+		"Properties": {
+			"ServiceToken": { "Fn::GetAtt" : [ "IntegrationTestFunction", "Arn" ] },
+			"s3Location": { "Ref": "BucketName" },
+			"host": { "Ref": "SFTPHostname" },
+			"port": 22,
+			"password": { "Ref": "SFTPPassword" },
+			"username": { "Ref": "SFTPUserName" },
+			"sftpLocation": ""
+		},
+		"DependsOn":
+			[ "TestLambdaLogGroup" ]
+	},
+    "BridgeRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version" : "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [ "lambda.amazonaws.com" ]
+              },
+              "Action": [ "sts:AssumeRole" ]
+            },
+			{
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [ "firehose.amazonaws.com" ]
+              },
+              "Action": [ "sts:AssumeRole" ]
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "LogWriter",
+            "PolicyDocument": {
+              "Version" : "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": "arn:aws:logs:*:*:*"
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "FileSyncher",
+            "PolicyDocument": {
+              "Version" : "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:*"
+                  ],
+                  "Resource": [
+                    { "Fn::Join":  [ "", [ "arn:aws:s3:::", { "Ref": "BucketName" } ] ] },
+                    { "Fn::Join":  [ "", [ "arn:aws:s3:::", { "Ref": "BucketName" } , "/*" ] ] }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "EventQueuer",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sqs:DeleteMessage",
+                    "sqs:GetQueueUrl",
+                    "sqs:ReceiveMessage",
+                    "sqs:SendMessage"
+                  ],
+                  "Resource": { "Fn::GetAtt" : [ "BridgeQueue", "Arn" ] }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "BridgeFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": "teleoptiintegration",
+          "S3Key": "connect-integration-teleopti-wfm/functions/packages/integration/lambda.zip"
+        },
+        "FunctionName": { "Ref": "AWS::StackName" },
+        "Description": "Used sync files between S3 and SFTP servers.",
+        "Environment": {
+        	"Variables" : {
+  				"s3Location": { "Ref": "BucketName" },
+    			"host": { "Ref": "SFTPHostname" },
+      			"port": 22,
+      			"password": { "Ref": "SFTPPassword" },
+      			"username": { "Ref": "SFTPUserName" },
+    			"sftpLocation": ""
+  			}
+		},
+        "Handler": "main.handle",
+        "MemorySize": "256",
+        "Role": { "Fn::GetAtt" : [ "BridgeRole", "Arn" ] },
+        "Runtime": "nodejs6.10",
+        "Timeout": 300
+      },
+      "DependsOn": [
+        "BridgeRole"
+      ]
+    },
+    "BridgeBucket": {
+      "Type" : "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": { "Ref": "BucketName" },
+		"LifecycleConfiguration": {
+			"Rules": [
+				{
+					"Status": "Enabled",
+					"ExpirationInDays": "90"
+				}
+			]
+		}
+      },
+      "DependsOn": [
+        "BridgeResourcePolicy","S3ToSQSPolicy"
+      ]
+    },
+	"TeleoptiFirehoseDeliveryStream": {
+	  "Type" : "AWS::KinesisFirehose::DeliveryStream",
+	  "Properties" : {
+		"DeliveryStreamType" : "DirectPut",
+		"S3DestinationConfiguration" : {
+		  "BucketARN" : { "Fn::GetAtt" : [ "BridgeBucket", "Arn" ] },
+		  "BufferingHints": {
+			  "IntervalInSeconds" : "300",
+			  "SizeInMBs" : "10"
+			},
+		  "CompressionFormat" : "UNCOMPRESSED",
+		  "RoleARN" : { "Fn::GetAtt" : [ "BridgeRole", "Arn" ] }
+		}
+	  },
+      "DependsOn": [
+        "BridgeRole","BridgeBucket"
+      ]
+	},
+    "LambdaLogGroup": {
+      "Type" : "AWS::Logs::LogGroup",
+      "Properties" : {
+        "LogGroupName": { "Fn::Join": [ "", [ "/aws/lambda/", { "Ref": "BridgeFunction" } ] ] },
+        "RetentionInDays" : 7
+      }
+    },
+	"TestLambdaLogGroup": {
+      "Type" : "AWS::Logs::LogGroup",
+      "Properties" : {
+        "LogGroupName": { "Fn::Join": [ "", [ "/aws/lambda/", { "Ref": "IntegrationTestFunction" } ] ] },
+        "RetentionInDays" : 7
+      }
+    },
+	"BridgeExecuteEvent":{
+	  "Type" : "AWS::Events::Rule",
+	  "Properties" : {
+		"Description" : "Scheduled event to run SFTP Lambda for Teleopti Integration",
+		"ScheduleExpression" : "rate(30 minutes)",
+		"State" : "ENABLED",
+		"Targets" : [ {
+			"Arn": { "Fn::GetAtt": [ "BridgeFunction", "Arn" ] },
+			"Id": { "Fn::Join" : ["", ["TeleoptiTranferEvent",{ "Ref": "AWS::StackName" } ]] }
+		}]
+	  }
+	},
+	"BridgeResourcePolicy": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": { "Fn::GetAtt": [ "BridgeFunction", "Arn" ] },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": { "Fn::GetAtt": [ "BridgeExecuteEvent", "Arn" ] }
+      },
+      "DependsOn": [
+        "BridgeFunction"
+      ]
+    },
+	"TeleoptiRTAGroup": {
+	   "Type": "AWS::IAM::Group",
+	   "Properties": {
+		  "Policies": [ {
+			 "PolicyName" : "giveaccesstokinesis",
+			 "PolicyDocument" : {
+				"Version": "2012-10-17",
+				"Statement" : [ {
+				  "Effect": "Allow",
+				  "Action": [
+					"kinesis:Get*",
+					"kinesis:List*",
+					"kinesis:Describe*"
+				  ],
+				  "Resource": "*"
+				} ]
+			  }
+			}]
+	   }
+	},
+	"TeleoptiRTAUser": {
+	  "Type": "AWS::IAM::User",
+	  "Properties": {
+		"Groups": [{ "Ref": "TeleoptiRTAGroup" }]
+	  },
+      "DependsOn": [
+        "TeleoptiRTAGroup"
+      ]
+	},
+	"TeleoptiRTAAccessKey" : {
+	   "Type" : "AWS::IAM::AccessKey",
+	   "Properties" : {
+		  "UserName" : { "Ref" : "TeleoptiRTAUser" }
+	   },
+      "DependsOn": [
+        "TeleoptiRTAUser"
+      ]
+	},
+    "FunctionTimeoutMetric": {
+      "Type": "AWS::Logs::MetricFilter",    
+      "Properties": {
+        "FilterPattern": "Task timed out",
+        "LogGroupName": { "Fn::Join" : ["", [ "/aws/lambda/", { "Ref" : "BridgeFunction" } ] ] },
+        "MetricTransformations": [
+          {
+            "MetricValue": "1",
+            "MetricNamespace": { "Ref": "AWS::StackName" },
+            "MetricName": "lambda-function-timeouts"
+          }
+        ]
+      },
+      "DependsOn": [
+        "BridgeFunction", "LambdaLogGroup"
+      ]
+    },
+    "ConnectionTimeoutMetric": {
+      "Type": "AWS::Logs::MetricFilter",    
+      "Properties": {
+        "FilterPattern": "ClientTimeoutException",
+        "LogGroupName": { "Fn::Join" : ["", [ "/aws/lambda/", { "Ref" : "BridgeFunction" } ] ] },
+        "MetricTransformations": [
+          {
+            "MetricValue": "1",
+            "MetricNamespace": { "Ref": "AWS::StackName" },
+            "MetricName": "connection-timeouts"
+          }
+        ]
+      },
+      "DependsOn": [
+        "BridgeFunction", "LambdaLogGroup"
+      ]
+    },
+    "ErrorMetric": {
+      "Type": "AWS::Logs::MetricFilter",    
+      "Properties": {
+        "FilterPattern": "UnknownException",
+        "LogGroupName": { "Fn::Join" : ["", [ "/aws/lambda/", { "Ref" : "BridgeFunction" } ] ] },
+        "MetricTransformations": [
+          {
+            "MetricValue": "1",
+            "MetricNamespace": { "Ref": "AWS::StackName" },
+            "MetricName": "errors"
+          }
+        ]
+      },
+      "DependsOn": [
+        "BridgeFunction", "LambdaLogGroup"
+      ]
+    },
+    "S3toSFTPMetric": {
+      "Type": "AWS::Logs::MetricFilter",    
+      "Properties": {
+        "FilterPattern": "[timestamp, requestId, streamName, colon, moved = Moved, numFiles, files = files, from, orig = S3, to, dest = SFTP]",
+        "LogGroupName": { "Fn::Join" : ["", [ "/aws/lambda/", { "Ref" : "BridgeFunction" } ] ] },
+        "MetricTransformations": [
+          {
+            "MetricValue": "$numFiles",
+            "MetricNamespace": { "Ref": "AWS::StackName" },
+            "MetricName": "s3-to-sftp"
+          }
+        ]
+      },
+      "DependsOn": [
+        "BridgeFunction", "LambdaLogGroup"
+      ]
+    }
+  },
+  "Outputs": {
+    "BridgeFunctionArn": {
+      "Description": "The ARN of the function that moves files between S3 and SFTP.",
+      "Value": { "Fn::GetAtt": [ "BridgeFunction", "Arn" ] }
+    },
+    "BridgeFunctionName": {
+      "Description": "The ARN of the function that moves files between S3 and SFTP.",
+      "Value": { "Ref": "BridgeFunction" }
+    },
+    "BridgeFunctionRole": {
+      "Description": "The role used by the generated Lambda function, to be added to any KMS keys.",
+      "Value": { "Ref": "BridgeRole" }
+    },
+	"FirehoseDeliveryStreamName": {
+      "Description": "The Firehose Delivery Stream to assign for CTR and Report Delivery.",
+      "Value": { "Ref": "TeleoptiFirehoseDeliveryStream" }
+    },
+    "RTAIAMUserName": {
+      "Description": "The UserName of the RTA IAM User.",
+      "Value": { "Ref": "TeleoptiRTAUser" }
+    },
+	"AccessKeyforTeleoptiRTA" : {
+	   "Value" : { "Ref" : "TeleoptiRTAAccessKey" }
+	},
+	"SecretKeyforTeleoptiRTA" : {
+	   "Value" : { "Fn::GetAtt" : [ "TeleoptiRTAAccessKey", "SecretAccessKey" ] }
+	} 
+  }
+}

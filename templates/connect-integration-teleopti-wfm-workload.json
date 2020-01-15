@@ -144,7 +144,7 @@
 					"Fn::GetAtt": ["TeleoptiIntegrationTestRole",
 					"Arn"]
 				},
-				"Runtime": "nodejs8.10",
+				"Runtime": "nodejs10.x",
 				"Timeout": 300
 			},
 			"DependsOn": ["TeleoptiIntegrationTestRole"]
@@ -286,7 +286,7 @@
 					"Fn::GetAtt": ["TeleoptiLambdaRole",
 					"Arn"]
 				},
-				"Runtime": "nodejs8.10",
+				"Runtime": "nodejs10.x",
 				"Timeout": 300
 			},
 			"DependsOn": ["TeleoptiLambdaRole"]

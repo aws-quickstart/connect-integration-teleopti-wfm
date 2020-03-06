@@ -1,1 +1,18 @@
-{}
+[
+    {
+        "ParameterKey": "SFTPUserName",
+        "ParameterValue": "override"
+    },
+    {
+        "ParameterKey": "SFTPPassword",
+        "ParameterValue": "Overr1d3"
+    },
+    {
+        "ParameterKey": "SFTPHostname",
+        "ParameterValue": "override.example.com"
+    },
+    {
+        "ParameterKey": "QSS3BucketName",
+        "ParameterValue": "$[taskcat_autobucket]"
+    }
+]

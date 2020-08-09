@@ -365,7 +365,8 @@
                         "username": {
                             "Ref": "SFTPUserName"
                         },
-                        "sftpLocation": ""
+                        "sftpLocation": "",
+                        "batchSize": 50
                     }
                 },
                 "Handler": "main.handle",

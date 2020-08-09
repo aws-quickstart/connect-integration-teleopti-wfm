@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: TeleOpti WFM integration for Amazon Connect (qs-1ofbedn5h)
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Teleopti SFTP Credentials
+        Parameters:
+          - SecurityGroupIds
+          - SubnetIds
+          - SFTPHostname
+          - SFTPUserName
+          - SFTPPassword
+      - Label:
+          default: AWS Quick Start Configuration
+        Parameters:
+          - QSS3BucketName
+          - QSS3BucketRegion
+          - QSS3KeyPrefix
+    ParameterLabels:
+      SecurityGroupIds:
+        default: List of security group IDs
+      SubnetIds:
+        default: List of subnet IDs
+      SFTPUserName:
+        default: 'Teleopti SFTP User ID:'
+      SFTPPassword:
+        default: 'Teleopti SFTP User Password:'
+      SFTPHostname:
+        default: 'Teleopti SFTP Hostname:'
+      QSS3BucketName:
+        default: 'Quick Start S3 Bucket Name:'
+      QSS3BucketRegion:
+        default: Quick Start S3 bucket region
+      QSS3KeyPrefix:
+        default: 'Quick Start lamdba S3 Prefix:'
+Parameters:
+  SFTPUserName:
+    AllowedPattern: ^[a-zA-Z0-9_]+$
+    ConstraintDescription: ' Password must contain only alphanumeric and underscore
+      characters.'
+    Type: String
+    Description: The Teleopti provided username for your SFTP account.
+  SFTPPassword:
+    AllowedPattern: ^(?=.*[0-9])(?=.*[a-z])(?=.*[A-Z]).{8,}$
+    ConstraintDescription: ' Password must be at least 8 characters, and contain uppercase
+      and lowercase letters, and at least one numeric.'
+    Type: String
+    Description: The Teleopti provided password for your SFTP account.
+    NoEcho: true
+  SFTPHostname:
+    Type: String
+    Description: The Teleopti provided hostname of your SFTP server.
+  SecurityGroupIds:
+    Description: List of security group IDs in the VPC that should be attached to
+      the Connect integration Lambda functions.
+    Type: List<AWS::EC2::SecurityGroup::Id>
+  SubnetIds:
+    Description: >-
+      List of subnet IDs in the VPC that should be attached to the Connect integration
+      Lambda functions. Note: the route table associated with the subnet(s) must point
+      to NAT Gateway for 0.0.0.0/0 destination, and the NAT Gateway must have an elastic
+      IP address that has been whitelisted by Calabrio.
+    Type: List<AWS::EC2::Subnet::Id>
+  QSS3BucketName:
+    AllowedPattern: ^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$
+    ConstraintDescription: Quick Start bucket name can include numbers, lowercase
+      letters, uppercase letters, and hyphens (-). It cannot start or end with a hyphen
+      (-).
+    Default: aws-quickstart
+    Description: S3 bucket name for the Quick Start assets. Quick Start bucket name
+      can include numbers, lowercase letters, uppercase letters, and hyphens (-).
+      It cannot start or end with a hyphen (-).
+    Type: String
+  QSS3BucketRegion:
+    Default: us-east-1
+    Description: The AWS Region where the Quick Start S3 bucket (QSS3BucketName) is
+      hosted. When using your own bucket, you must specify this value.
+    Type: String
+  QSS3KeyPrefix:
+    AllowedPattern: ^[0-9a-zA-Z-/]*$
+    ConstraintDescription: Quick Start key prefix can include numbers, lowercase letters,
+      uppercase letters, hyphens (-), and forward slash (/).
+    Default: connect-integration-teleopti-wfm/
+    Description: S3 key prefix for the Quick Start assets. Quick Start key prefix
+      can include numbers, lowercase letters, uppercase letters, hyphens (-), and
+      forward slash (/).
+    Type: String
+Conditions:
+  UsingDefaultBucket: !Equals
+    - !Ref 'QSS3BucketName'
+    - aws-quickstart
+Rules:
+  RegionSupport:
+    Assertions:
+      - Assert: !Contains
+          - - us-east-1
+            - us-east-2
+            - us-west-1
+            - us-west-2
+            - ap-northeast-1
+            - ap-northeast-2
+            - ap-south-1
+            - ap-southeast-1
+            - ap-southeast-2
+            - ca-central-1
+            - eu-central-1
+            - eu-west-1
+            - eu-west-2
+            - eu-west-3
+            - sa-east-1
+          - !Ref 'AWS::Region'
+        AssertDescription: Region must support Amazon Connect Service.
+Resources:
+  TeleoptiCopyLambdaStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - https://${S3Bucket}.s3.${S3Region}.${AWS::URLSuffix}/${QSS3KeyPrefix}templates/teleopti_copy_lambda.template.yaml
+        - S3Region: !If
+            - UsingDefaultBucket
+            - !Ref 'AWS::Region'
+            - !Ref 'QSS3BucketRegion'
+          S3Bucket: !If
+            - UsingDefaultBucket
+            - !Sub '${QSS3BucketName}-${AWS::Region}'
+            - !Ref 'QSS3BucketName'
+      Parameters:
+        QSS3BucketName: !Ref 'QSS3BucketName'
+        QSS3BucketRegion: !Ref 'QSS3BucketRegion'
+        QSS3KeyPrefix: !Ref 'QSS3KeyPrefix'
+  TeleoptiIntegrationStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - https://${S3Bucket}.s3.${S3Region}.${AWS::URLSuffix}/${QSS3KeyPrefix}templates/connect-integration-teleopti-wfm-workload.template.yaml
+        - S3Region: !If
+            - UsingDefaultBucket
+            - !Ref 'AWS::Region'
+            - !Ref 'QSS3BucketRegion'
+          S3Bucket: !If
+            - UsingDefaultBucket
+            - !Sub '${QSS3BucketName}-${AWS::Region}'
+            - !Ref 'QSS3BucketName'
+      Parameters:
+        QSS3BucketName: !GetAtt 'TeleoptiCopyLambdaStack.Outputs.TeleoptiLambdasBucket'
+        QSS3BucketRegion: !Ref 'AWS::Region'
+        QSS3KeyPrefix: !Ref 'QSS3KeyPrefix'
+        SFTPHostname: !Ref 'SFTPHostname'
+        SFTPUserName: !Ref 'SFTPUserName'
+        SFTPPassword: !Ref 'SFTPPassword'
+        SecurityGroupIds: !Join
+          - ','
+          - !Ref 'SecurityGroupIds'
+        SubnetIds: !Join
+          - ','
+          - !Ref 'SubnetIds'
+Outputs:
+  TeleoptiIntegrationFunctionArn:
+    Description: The ARN of the function that moves files between S3 and SFTP.
+    Value: !GetAtt 'TeleoptiIntegrationStack.Outputs.TeleoptiIntegrationFunctionArn'
+  TeleoptiIntegrationFunctionName:
+    Description: The Name of the function that moves files between S3 and SFTP.
+    Value: !GetAtt 'TeleoptiIntegrationStack.Outputs.TeleoptiIntegrationFunctionName'
+  TeleoptiIntegrationFunctionRole:
+    Description: The role used by the generated Lambda function, to be added to any
+      KMS keys.
+    Value: !GetAtt 'TeleoptiIntegrationStack.Outputs.TeleoptiIntegrationFunctionRole'
+  FirehoseDeliveryStreamName:
+    Description: The Firehose Delivery Stream to assign for CTR and Report Delivery.
+    Value: !GetAtt 'TeleoptiIntegrationStack.Outputs.FirehoseDeliveryStreamName'
+  RTAIAMUserName:
+    Description: The UserName of the RTA IAM User.
+    Value: !GetAtt 'TeleoptiIntegrationStack.Outputs.RTAIAMUserName'
+  AccessKeyforTeleoptiRTA:
+    Value: !GetAtt 'TeleoptiIntegrationStack.Outputs.AccessKeyforTeleoptiRTA'
+  SecretKeyforTeleoptiRTA:
+    Value: !GetAtt 'TeleoptiIntegrationStack.Outputs.SecretKeyforTeleoptiRTA'

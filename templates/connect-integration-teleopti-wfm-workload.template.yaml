@@ -49,6 +49,10 @@ Parameters:
       must point to NAT Gateway for 0.0.0.0/0 destination, and the NAT Gateway must
       have an elastic IP address that has been whitelisted by Calabrio.'
     Type: List<AWS::EC2::Subnet::Id>
+  TeleoptiIntegrationBucketName:
+    Description: (Optional) The name of an existing bucket where your Amazon Connect reports are stored.
+    Default: ''
+    Type: String
   QSS3BucketName:
     AllowedPattern: ^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$
     ConstraintDescription: Quick Start bucket name can include numbers, lowercase
@@ -73,6 +77,8 @@ Parameters:
       can include numbers, lowercase letters, uppercase letters, hyphens (-), and
       forward slash (/).
     Type: String
+Conditions:
+  CreateTeleoptiIntegrationBucket: !Equals ['', !Ref 'TeleoptiIntegrationBucketName']
 Rules:
   RegionSupport:
     Assertions:
@@ -185,6 +191,8 @@ Resources:
       - TestTeleoptiLambdaLogGroup
   TeleoptiLambdaRole:
     Type: AWS::IAM::Role
+    Metadata:
+      CreateAfterS3BucketDependency:  !If [CreateTeleoptiIntegrationBucket, !Ref TeleoptiIntegrationBucket, !Ref TeleoptiIntegrationBucketName]
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -231,8 +239,8 @@ Resources:
                 Action:
                   - s3:*
                 Resource:
-                  - !GetAtt 'TeleoptiIntegrationBucket.Arn'
-                  - !Sub 'arn:aws:s3:::${TeleoptiIntegrationBucket}/*'
+                  - !If [CreateTeleoptiIntegrationBucket, !Sub 'arn:aws:s3:::${TeleoptiIntegrationBucket}', !Sub 'arn:aws:s3:::${TeleoptiIntegrationBucketName}']
+                  - !If [CreateTeleoptiIntegrationBucket, !Sub 'arn:aws:s3:::${TeleoptiIntegrationBucket}/*', !Sub 'arn:aws:s3:::${TeleoptiIntegrationBucketName}/*']
         - PolicyName: EventQueuer
           PolicyDocument:
             Version: '2012-10-17'
@@ -245,7 +253,6 @@ Resources:
                   - sqs:SendMessage
                 Resource: !GetAtt 'TeleoptiMessageQueue.Arn'
     DependsOn:
-      - TeleoptiIntegrationBucket
       - TeleoptiMessageQueue
   TeleoptiIntegrationFunction:
     Type: AWS::Lambda::Function
@@ -263,7 +270,7 @@ Resources:
       Description: Used sync files between S3 and SFTP servers.
       Environment:
         Variables:
-          s3Location: !Ref 'TeleoptiIntegrationBucket'
+          s3Location: !If [CreateTeleoptiIntegrationBucket, !Ref TeleoptiIntegrationBucket, !Ref TeleoptiIntegrationBucketName]
           host: !Ref 'SFTPHostname'
           port: '22'
           password: !Ref 'SFTPPassword'
@@ -281,6 +288,7 @@ Resources:
     DependsOn:
       - TeleoptiLambdaRole
   TeleoptiIntegrationBucket:
+    Condition: CreateTeleoptiIntegrationBucket
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     Properties:
@@ -297,10 +305,12 @@ Resources:
       - TeleoptiIntegrationTest
   TeleoptiFirehoseDeliveryStream:
     Type: AWS::KinesisFirehose::DeliveryStream
+    Metadata:
+      CreateAfterS3BucketDependency:  !If [CreateTeleoptiIntegrationBucket, !Ref TeleoptiIntegrationBucket, !Ref TeleoptiIntegrationBucketName]
     Properties:
       DeliveryStreamType: DirectPut
       S3DestinationConfiguration:
-        BucketARN: !GetAtt 'TeleoptiIntegrationBucket.Arn'
+        BucketARN: !If [CreateTeleoptiIntegrationBucket, !Sub 'arn:aws:s3:::${TeleoptiIntegrationBucket}', !Sub 'arn:aws:s3:::${TeleoptiIntegrationBucketName}']
         BufferingHints:
           IntervalInSeconds: 300
           SizeInMBs: 10
@@ -308,7 +318,6 @@ Resources:
         RoleARN: !GetAtt 'TeleoptiLambdaRole.Arn'
     DependsOn:
       - TeleoptiLambdaRole
-      - TeleoptiIntegrationBucket
   TeleoptiLambdaLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:

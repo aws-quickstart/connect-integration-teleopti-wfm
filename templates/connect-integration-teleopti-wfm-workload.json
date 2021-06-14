@@ -204,7 +204,7 @@
                     "Fn::GetAtt": ["TeleoptiIntegrationTestRole",
                     "Arn"]
                 },
-                "Runtime": "nodejs10.x",
+                "Runtime": "nodejs12.x",
                 "VpcConfig" : {
                     "SecurityGroupIds": {
                         "Ref": "SecurityGroupIds"
@@ -375,7 +375,7 @@
                     "Fn::GetAtt": ["TeleoptiLambdaRole",
                     "Arn"]
                 },
-                "Runtime": "nodejs10.x",
+                "Runtime": "nodejs12.x",
                 "VpcConfig" : {
                     "SecurityGroupIds": {
                         "Ref": "SecurityGroupIds"
